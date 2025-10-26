@@ -1,11 +1,21 @@
 import requests
-
+import os
 from typing import Final
 
 
 session: Final = requests.Session()
+
+# Local Ollama
 MODEL: Final = "gemma3:1b"
 LLM_ENDPOINT: Final = "http://localhost:11434/api/generate"
+
+# Google Gemini API
+GEMINI_API_KEY: Final = os.environ["GEMINI_API_KEY"]
+GEMINI_MODEL: Final = "gemini-2.0-flash"
+LLM_GEMINI_ENDPOINT: Final = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}".format(
+    GEMINI_MODEL, GEMINI_API_KEY
+)
+
 SYSTEM_PROMPT_GEN_EXAMPLE: Final = """
 You are a multilingual language model specialized in generating clear and natural example sentences.
 Given a single word (in English or Japanese, NOT Chinese), generate a simple and appropriate example sentence that uses the word naturally.
@@ -53,12 +63,32 @@ example:""",
     return msg
 
 
+def translate_sentence(s: str) -> str:
+    prompt = f"""Translate this sentence to English '{s}', then break it down by chunks and explain words by words."""
+
+    payload = {
+        "system_instruction": {
+            "parts": [
+                {
+                    "text": "You are a Japanese-English teacher, you are concise, not adding unnecessary stuff in your answer."
+                }
+            ]
+        },
+        "contents": [{"parts": [{"text": prompt}]}],
+    }
+
+    resp = session.post(LLM_GEMINI_ENDPOINT, json=payload).json()
+    msg = resp["candidates"][0]["content"]["parts"][0]["text"]
+
+    return msg
+
+
 def gen_example(word_def: str) -> str:
     payload = {
-        "model": MODEL,
-        "prompt": f'write an example for "{word_def}"',
-        "system": SYSTEM_PROMPT_GEN_EXAMPLE,
-        "stream": False,
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT_GEN_EXAMPLE}]},
+        "contents": [{"parts": [{"text": f'write an example for "{word_def}"'}]}],
     }
-    msg = session.post(LLM_ENDPOINT, json=payload).json()["response"]
+    resp = session.post(LLM_GEMINI_ENDPOINT, json=payload).json()
+    msg = resp["candidates"][0]["content"]["parts"][0]["text"]
+
     return msg

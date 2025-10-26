@@ -12,6 +12,7 @@ import uds
 import jp_dict
 import cronjob
 import llm
+import jp_podcast
 
 import config
 
@@ -122,37 +123,23 @@ def get_aqi_hanoi() -> tuple:
 
 
 def get_aqi_hcm() -> tuple:
-    url = "https://airnet.waqi.info/airnet/map/bounds"
-    data = {
-        "bounds": "106.65545867915007,10.773554342818551,106.71194267422896,10.788963661784884",
-        "zoom": 16,
-        "xscale": 61493.52564648868,
-        "width": 2481,
-    }
-
-    resp = requests.post(url, json=data)
-    locs = resp.json()
-    us_embassy = locs["data"][0]
-
-    us_embassy.update(
-        {
-            "utime": datetime.datetime.utcfromtimestamp(us_embassy["u"]).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        }
-    )
-    return us_embassy["n"], us_embassy["a"], us_embassy["utime"]
-
-
-def get_aqi_jp() -> tuple:
     resp = requests.get(
-        "https://api.waqi.info/mapq/bounds/?bounds=35.2002957,139.2889003,35.4002958,139.5889103"
-    )
-    locs = resp.json()
-    if locs == []:
-        return "", "", ""
-    us_embassy = locs[0]
-    return us_embassy["city"], us_embassy["aqi"], us_embassy["utime"]
+        "http://api.openweathermap.org/data/2.5/air_pollution?lat=10.81877&lon=106.70755&appid={}".format(
+            API_TEMP
+        )
+    ).json()
+
+    data_aqi = resp["list"]
+
+    if len(data_aqi) > 0:
+        location = "Ho Chi Minh City"
+        value = str(data_aqi[0]["components"]["pm2_5"])
+        utime = datetime.datetime.utcfromtimestamp(data_aqi[0]["dt"]).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        return location, value, utime
+    else:
+        return None, None, None
 
 
 def send_message(session: requests.Session, chat_id: int, text: str = "hi") -> None:
@@ -350,7 +337,7 @@ class Dispatcher:
                 text="To show weather data, you need a key api and set `WEATHER_TOKEN` env, go to https://openweathermap.org/api to get one.",
             )
         else:
-            cities = ["Yokohama", "Ho Chi Minh", "Hanoi"]
+            cities = ["Ho Chi Minh", "Hanoi"]
             temp_cities = get_temp(cities)
             for temp in temp_cities:
                 send_message(
@@ -359,19 +346,22 @@ class Dispatcher:
                     text=f"Weather in {temp['name']} is {temp['weather']}, temp now: {temp['temp_now']}, feels like: {temp['feels_like']}, humidity:  {temp['humidity']}%",
                 )
                 logger.info("Temp: served city %s", temp["name"])
-            city = "jp&hcm&hn"
-            location, value, utime = get_aqi_jp()
-            send_message(
-                session=self.session,
-                chat_id=chat_id,
-                text=f"PM2.5 {value} at {location} at {utime}",
-            )
+            city = "hcm&hn"
+
             location, value, utime = get_aqi_hcm()
-            send_message(
-                session=self.session,
-                chat_id=chat_id,
-                text=f"PM2.5 {value} at {location} at {utime}",
-            )
+            if location is not None or value is not None or utime is not None:
+                send_message(
+                    session=self.session,
+                    chat_id=chat_id,
+                    text=f"PM2.5 {value} at {location} at {utime}",
+                )
+            else:
+                send_message(
+                    session=self.session,
+                    chat_id=chat_id,
+                    text="No AQI available for Ho Chi Minh City",
+                )
+
             location, value, utime = get_aqi_hanoi()
             send_message(
                 session=self.session,
@@ -424,6 +414,14 @@ class Dispatcher:
         send_message(session=self.session, chat_id=chat_id, text=msg[:300])
         logger.info("served a joke")
 
+    def dispatch_nikkei(self, text: str, chat_id: int, from_id: int) -> None:
+        episodes = jp_podcast.get_latest_podcast_episodes()
+        latest = episodes[0]
+
+        msg = llm.translate_sentence(latest.name)
+        send_message(session=self.session, chat_id=chat_id, text=f"{msg}\n{latest.url}")
+        logger.info("served nikkeime")
+
     def dispatch_lt(self, text: str, chat_id: int, from_id: int) -> None:
         _lt, keyword = text.split(" ", 1)
         msg = llm.translate(keyword)
@@ -466,12 +464,7 @@ class Dispatcher:
             chat_id=chat_id,
             text=f"PM2.5 {value} at {location} at {utime}",
         )
-        location, value, utime = get_aqi_jp()
-        send_message(
-            session=self.session,
-            chat_id=chat_id,
-            text=f"PM2.5 {value} at {location} at {utime}",
-        )
+
         logger.info("AQI: served city %s", city)
 
     def dispatch_tem(self, text: str, chat_id: int, from_id: int) -> None:
@@ -482,7 +475,7 @@ class Dispatcher:
                 text="To show weather data, you need a key api and set `WEATHER_TOKEN` env, go to https://openweathermap.org/api to get one.",
             )
         else:
-            cities = ["Yokohama", "Ho Chi Minh"]
+            cities = ["Ho Chi Minh", "Hanoi"]
             temp_cities = get_temp(cities)
             for temp in temp_cities:
                 send_message(
@@ -614,6 +607,10 @@ class Dispatcher:
         logger.info(f"LLM x {text}")
 
     def dispatch(self, text: str, chat_id: int, from_id: int) -> None:
+        if not text or not text.strip():
+            logger.warn("Received empty message, skipping")
+            return
+
         cmd, *_ = text.split()
         pure_cmd = cmd.strip().lstrip("/")
         func = getattr(self, f"dispatch_{pure_cmd}", print)
