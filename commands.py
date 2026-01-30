@@ -115,31 +115,44 @@ def get_aqi_hanoi() -> tuple:
         "https://api.waqi.info/mapq/bounds/?bounds=20.96111901161895,105.75405120849611,21.09571147652958,105.91609954833986"
     )
     locs = resp.json()
-    for i in locs:
-        if "BVMT" in i["city"]:
-            us_embassy = i
-            break
-    return us_embassy["city"], us_embassy["aqi"], us_embassy["utime"]
+    if len(locs) > 0:
+        for i in locs:
+            if i["aqi"].isdigit() and int(i["aqi"]) > 0:
+                return i["city"], i["aqi"], i["utime"]
+        return locs[0]["city"], None, locs[0]["utime"]
+    else:
+        return "Hanoi", None, None
 
 
 def get_aqi_hcm() -> tuple:
-    resp = requests.get(
-        "http://api.openweathermap.org/data/2.5/air_pollution?lat=10.81877&lon=106.70755&appid={}".format(
-            API_TEMP
-        )
-    ).json()
+    url = "https://airnet.waqi.info/airnet/map/bounds"
 
-    data_aqi = resp["list"]
+    tz_hcm = datetime.timezone(datetime.timedelta(hours=7))
+    current_time = datetime.datetime.utcnow().isoformat()
 
-    if len(data_aqi) > 0:
-        location = "Ho Chi Minh City"
-        value = str(data_aqi[0]["components"]["pm2_5"])
-        utime = datetime.datetime.utcfromtimestamp(data_aqi[0]["dt"]).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        return location, value, utime
-    else:
-        return None, None, None
+    data = {
+        "bounds": "106.57606490366962,10.710644309189911,106.83509113187337,10.906718682210693",
+        "zoom": "11",
+        "xscale": "1303.4747344074406",
+        "width": "678",
+        "time": current_time,
+    }
+
+    response = requests.post(url, data=data)
+    locs = response.json()["data"]
+
+    if len(locs) > 0:
+        highest_aqi = max(locs, key=lambda x: x["u"] if isinstance(x["u"], int) else 0)
+
+        if highest_aqi:
+            name = highest_aqi["n"]
+            aqi_value = highest_aqi["a"]
+            utime = datetime.datetime.fromtimestamp(
+                highest_aqi["u"], tz=tz_hcm
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            return name, aqi_value, utime
+
+    return "Ho Chi Minh City", None, None
 
 
 def send_message(session: requests.Session, chat_id: int, text: str = "hi") -> None:
